@@ -10,7 +10,7 @@ Usage:
   python run_daily.py --dry-run    # show what would run without executing
 
 Designed for cron:
-  0 10 * * 1-5 cd /opt/asean-dashboard && /opt/asean-dashboard/venv/bin/python scripts/run_daily.py >> /var/log/asean-dashboard.log 2>&1
+  0 22 * * * cd /opt/asean-dashboard && /opt/asean-dashboard/venv/bin/python scripts/run_daily.py >> /var/log/asean-dashboard.log 2>&1
 """
 
 import argparse
@@ -47,10 +47,10 @@ def run_script(name, args=None):
 
 
 def push_to_github():
-    """Commit and push dashboard.html to GitHub Pages."""
-    dashboard_path = os.path.join(PROJECT_DIR, 'dashboard.html')
+    """Commit and push index.html to GitHub Pages."""
+    dashboard_path = os.path.join(PROJECT_DIR, 'index.html')
     if not os.path.exists(dashboard_path):
-        log("No dashboard.html to push")
+        log("No index.html to push")
         return False
 
     # Check if this is a git repo
@@ -61,29 +61,24 @@ def push_to_github():
 
     now = datetime.now(SG_TZ).strftime('%Y-%m-%d %H:%M SGT')
 
-    cmds = [
-        ['git', '-C', PROJECT_DIR, 'add', 'dashboard.html'],
-        ['git', '-C', PROJECT_DIR, 'diff', '--cached', '--quiet'],  # exits 1 if there are changes
-    ]
-
     # Check if there are changes to commit
     result = subprocess.run(
-        ['git', '-C', PROJECT_DIR, 'diff', '--cached', '--quiet', 'dashboard.html'],
+        ['git', '-C', PROJECT_DIR, 'diff', '--cached', '--quiet', 'index.html'],
         capture_output=True
     )
 
     # Also check unstaged changes
     result2 = subprocess.run(
-        ['git', '-C', PROJECT_DIR, 'diff', '--quiet', 'dashboard.html'],
+        ['git', '-C', PROJECT_DIR, 'diff', '--quiet', 'index.html'],
         capture_output=True
     )
 
     if result.returncode == 0 and result2.returncode == 0:
-        log("No changes to dashboard.html — skipping push")
+        log("No changes to index.html — skipping push")
         return True
 
     # Stage, commit, push
-    subprocess.run(['git', '-C', PROJECT_DIR, 'add', 'dashboard.html'], check=True)
+    subprocess.run(['git', '-C', PROJECT_DIR, 'add', 'index.html'], check=True)
     subprocess.run(
         ['git', '-C', PROJECT_DIR, 'commit', '-m', f'Update dashboard ({now})'],
         check=True

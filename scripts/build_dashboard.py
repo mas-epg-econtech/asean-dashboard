@@ -182,7 +182,7 @@ def build_html(data):
         # Commodities — Yahoo Finance quote pages where applicable
         'BRENT':        'https://finance.yahoo.com/quote/BZ%3DF',
         'GOLD':         'https://finance.yahoo.com/quote/GC%3DF',
-        'JKM_LNG':      'https://finance.yahoo.com/quote/JKM%3DF',
+        'JKM_LNG':      'https://www.investing.com/commodities/lng-japan-korea-marker-platts-futures',
         'NICKEL':       'https://www.investing.com/commodities/nickel',
         'CPO':          'https://www.investing.com/commodities/palm-oil',
         'RUBBER_TSR20': 'https://www.investing.com/commodities/rubber-tsr20-futures',

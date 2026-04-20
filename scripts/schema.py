@@ -127,12 +127,6 @@ def init_db():
          'daily', 'end-of-day', 'free (yfinance library)',
          'COMEX gold front-month futures settlement price in USD/troy oz.'),
 
-        ('yfinance:jkm', 'Yahoo Finance', 'https://finance.yahoo.com',
-         'JKM LNG Futures', 'JKM=F',
-         'https://finance.yahoo.com/quote/JKM=F/',
-         'daily', 'end-of-day', 'free (yfinance library)',
-         'S&P Global Platts JKM LNG futures in USD/MMBtu.'),
-
         # Tier 2: Asian Bonds Online (ADB)
         ('adb:asianbondsonline', 'Asian Development Bank', 'https://asianbondsonline.adb.org',
          'AsianBondsOnline Market Indicators', None, 'https://asianbondsonline.adb.org/{country}/',
@@ -157,6 +151,12 @@ def init_db():
          'https://www.investing.com/commodities/rubber-tsr20-futures',
          'daily', 'near real-time', 'free (public website)',
          'SGX TSR20 rubber futures in USc/kg.'),
+
+        ('investing.com:jkm', 'Investing.com', 'https://www.investing.com',
+         'JKM LNG Futures (Platts)', None,
+         'https://www.investing.com/commodities/lng-japan-korea-marker-platts-futures',
+         'daily', 'near real-time', 'free (public website)',
+         'S&P Global Platts JKM LNG futures in USD/MMBtu. Scraped from embedded JSON on page.'),
 
         ('investing.com:coal', 'Investing.com', 'https://www.investing.com',
          'Newcastle Coal Futures', None,
@@ -208,7 +208,7 @@ def init_db():
 
         # Commodities
         ('BRENT', 'commodity', 'Brent Crude Oil (ICE Futures)', 'USD/bbl', 'yfinance:brent', 1),
-        ('JKM_LNG', 'commodity', 'JKM LNG Futures (Platts)', 'USD/MMBtu', 'yfinance:jkm', 1),
+        ('JKM_LNG', 'commodity', 'JKM LNG Futures (Platts)', 'USD/MMBtu', 'investing.com:jkm', 2),
         ('COAL_NEWC', 'commodity', 'Thermal Coal (Newcastle FOB)', 'USD/tonne', 'investing.com:coal', 2),
         ('CPO', 'commodity', 'Crude Palm Oil (Bursa Malaysia FCPO)', 'MYR/tonne', 'investing.com:cpo', 2),
         ('RUBBER_TSR20', 'commodity', 'Rubber TSR20 Futures (SGX)', 'USc/kg', 'investing.com:rubber', 2),

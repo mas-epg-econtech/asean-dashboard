@@ -10,8 +10,17 @@ Usage:
   python ingest_tier2.py --bonds-only   # only scrape bond yields
   python ingest_tier2.py --commod-only  # only scrape commodities
 
-Note: These are web scraping sources and may break if site layouts change.
-      The script includes error handling and logs all failures.
+Proxy support:
+  Investing.com requests are routed through a local proxy at localhost:8080
+  by default (gost → DataImpulse residential proxy, Singapore IP).
+  Override with: export PROXY_URL="http://host:port"
+  Set PROXY_URL="" to disable proxying.
+
+  Only Investing.com requests use the proxy. yfinance and ADB calls
+  go direct.
+
+Note: Investing.com sources may break if the site blocks VPS IPs or
+      changes layout. The script logs all failures for debugging.
 """
 
 import argparse
@@ -22,7 +31,7 @@ import re
 import sqlite3
 import time
 from datetime import datetime
-from urllib.request import urlopen, Request
+from urllib.request import urlopen, Request, build_opener, ProxyHandler, HTTPSHandler
 from urllib.error import URLError, HTTPError
 
 try:
@@ -31,6 +40,13 @@ try:
 except ImportError:
     HAS_BS4 = False
     print("WARNING: beautifulsoup4 not installed. Run: pip install beautifulsoup4")
+
+try:
+    import yfinance as yf
+    HAS_YFINANCE = True
+except ImportError:
+    HAS_YFINANCE = False
+    print("WARNING: yfinance not installed. Run: pip install yfinance")
 
 # ---------- Config ----------
 
@@ -47,7 +63,9 @@ ADB_BONDS = {
 }
 ADB_BASE_URL = 'https://asianbondsonline.adb.org'
 
-# Commodity sources: Investing.com
+# ---------- Commodity config ----------
+# All commodities scraped from Investing.com (via residential proxy)
+
 INVESTING_COMMODITIES = {
     'NICKEL':       ('https://www.investing.com/commodities/nickel',
                      'commodity', 'USD/tonne', 'investing.com:nickel'),
@@ -61,16 +79,52 @@ INVESTING_COMMODITIES = {
                      'commodity', 'USD/tonne', 'investing.com:coal'),
 }
 
+# Updated browser headers — use a current Chrome version and include
+# extra headers to reduce chance of being blocked by Cloudflare
 BROWSER_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
                   'AppleWebKit/537.36 (KHTML, like Gecko) '
-                  'Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                  'Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,'
+              'image/avif,image/webp,image/apng,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'identity',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"macOS"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
 }
 
 # Polite delay between requests (seconds)
-REQUEST_DELAY = 2
+REQUEST_DELAY = 3
+
+# ---------- Proxy config ----------
+# Set PROXY_URL env var to route Investing.com requests through a proxy.
+# Supports: http://user:pass@host:port, socks5://user:pass@host:port
+# Only used for Investing.com — yfinance and ADB go direct.
+
+# Default to the local gost proxy on the VPS (forwards through DataImpulse
+# residential proxy in Singapore). Override with PROXY_URL env var if needed.
+PROXY_URL = os.environ.get('PROXY_URL', 'http://localhost:8080').strip()
+
+
+def _open_url(req, timeout=20, use_proxy=False):
+    """Open a URL request, optionally routing through the configured proxy."""
+    if use_proxy and PROXY_URL:
+        proxy_handler = ProxyHandler({
+            'http': PROXY_URL,
+            'https': PROXY_URL,
+        })
+        opener = build_opener(proxy_handler, HTTPSHandler())
+        return opener.open(req, timeout=timeout)
+    return urlopen(req, timeout=timeout)
+
 
 # ---------- Logging ----------
 
@@ -186,26 +240,36 @@ def ingest_bonds(conn):
     return count
 
 
-# ---------- Commodity scraping (Investing.com) ----------
+# ---------- yfinance commodity ingestion ----------
+
+
+
+# ---------- Investing.com commodity scraping ----------
 
 def scrape_investing_price(url):
     """
     Scrape commodity price from Investing.com page.
     Extracts the 'last' price from embedded JSON data.
+    Routes through PROXY_URL if configured.
     Returns (last_price, prev_close, currency) or (None, None, None).
     """
     req = Request(url, headers=BROWSER_HEADERS)
 
     try:
-        resp = urlopen(req, timeout=20)
+        resp = _open_url(req, timeout=20, use_proxy=True)
         html = resp.read().decode('utf-8', errors='replace')
     except (URLError, HTTPError) as e:
-        logger.error(f"Investing.com request failed for {url}: {e}")
+        logger.error(f"Investing.com request failed for {url}: {e}"
+                     f"{' (via proxy)' if PROXY_URL else ''}")
+        return None, None, None
+
+    # Detect Cloudflare block
+    if len(html) < 5000 or 'just a moment' in html.lower():
+        logger.warning(f"Investing.com returned a Cloudflare challenge page for {url} "
+                       f"(response length: {len(html)} bytes). VPS IP may be blocked.")
         return None, None, None
 
     # Extract price from JSON blobs embedded in HTML
-    # Pattern: {"lastClose": NNN, ..., "last": NNN, ..., "currency": "XXX"}
-    # or: {"last": NNN, ..., "lastClose": NNN, ...}
     last_match = re.search(r'"last"\s*:\s*([\d.]+)', html)
     prev_match = re.search(r'"lastClose"\s*:\s*([\d.]+)', html)
     curr_match = re.search(r'"currency"\s*:\s*"([^"]+)"', html)
@@ -216,6 +280,21 @@ def scrape_investing_price(url):
         currency = curr_match.group(1) if curr_match else None
         return last, prev, currency
 
+    # Fallback: try other common price patterns
+    alt_patterns = [
+        r'"price"\s*:\s*"?([\d,.]+)"?',
+        r'"currentPrice"\s*:\s*"?([\d,.]+)"?',
+        r'data-test="instrument-price-last"[^>]*>([\d,.]+)',
+    ]
+    for pat in alt_patterns:
+        m = re.search(pat, html)
+        if m:
+            price = float(m.group(1).replace(',', ''))
+            logger.info(f"  Used fallback pattern for {url}: {price}")
+            return price, None, None
+
+    logger.warning(f"Could not extract price from {url} "
+                   f"(response length: {len(html)} bytes)")
     return None, None, None
 
 
@@ -237,7 +316,7 @@ def ingest_commodities(conn):
                 ccy_str = f"  ({currency})" if currency else ""
                 logger.info(f"  {indicator}: {last:.2f} {unit}{prev_str}{ccy_str}")
             else:
-                errors.append(f"{indicator}: parse failed")
+                errors.append(f"{indicator}: parse failed (likely blocked)")
                 logger.warning(f"  {indicator}: could not extract price from {url}")
 
             time.sleep(REQUEST_DELAY)  # be polite
@@ -247,12 +326,21 @@ def ingest_commodities(conn):
             logger.error(f"  {indicator}: {e}")
 
     status = 'success' if not errors else ('partial' if count > 0 else 'error')
-    msg = f"Ingested {count}/{len(INVESTING_COMMODITIES)} commodities"
+    msg = f"Ingested {count}/{len(INVESTING_COMMODITIES)} Investing.com commodities"
     if errors:
         msg += f" | Errors: {'; '.join(errors)}"
+
+    # Log a prominent warning if Investing.com scraping is fully failing
+    if count == 0 and len(INVESTING_COMMODITIES) > 0:
+        logger.warning("=" * 50)
+        logger.warning("ALL Investing.com commodity scrapes failed!")
+        logger.warning("The VPS IP is likely blocked by Cloudflare.")
+        logger.warning("Consider using a proxy or alternative data source.")
+        logger.warning("=" * 50)
+
     log_ingestion(conn, 'investing.com', status, count, msg)
 
-    return count
+    return yf_count + count
 
 
 # ---------- Backfill via Investing.com historical pages ----------
@@ -278,16 +366,18 @@ INVESTING_HISTORY_SLUGS = {
 def scrape_investing_historical(url_path):
     """
     Scrape the historical data table from an Investing.com *-historical-data page.
+    Routes through PROXY_URL if configured.
     Returns list of (date_str, price) tuples, newest first.
     """
     url = f'https://www.investing.com/{url_path}-historical-data'
     req = Request(url, headers=BROWSER_HEADERS)
 
     try:
-        resp = urlopen(req, timeout=20)
+        resp = _open_url(req, timeout=20, use_proxy=True)
         html = resp.read().decode('utf-8', errors='replace')
     except (URLError, HTTPError) as e:
-        logger.error(f"Historical page request failed: {url}: {e}")
+        logger.error(f"Historical page request failed: {url}: {e}"
+                     f"{' (via proxy)' if PROXY_URL else ''}")
         return []
 
     if not HAS_BS4:
@@ -365,7 +455,13 @@ def backfill_tier2(conn):
 def run_daily():
     """Run the standard daily Tier 2 ingestion."""
     logger.info("=" * 60)
-    logger.info("STARTING TIER 2 INGESTION (web scraping)")
+    logger.info("STARTING TIER 2 INGESTION (web scraping + yfinance)")
+    if PROXY_URL:
+        # Log proxy host only (mask credentials)
+        proxy_host = PROXY_URL.split('@')[-1] if '@' in PROXY_URL else PROXY_URL
+        logger.info(f"Proxy enabled for Investing.com: {proxy_host}")
+    else:
+        logger.info("No proxy configured (Investing.com requests go direct)")
     logger.info("=" * 60)
 
     conn = get_conn()
@@ -386,7 +482,7 @@ def run_daily():
 
 
 def main():
-    parser = argparse.ArgumentParser(description='ASEAN Dashboard - Tier 2 Data Ingestion (Web Scraping)')
+    parser = argparse.ArgumentParser(description='ASEAN Dashboard - Tier 2 Data Ingestion (Web Scraping + yfinance)')
     parser.add_argument('--bonds-only', action='store_true',
                         help='Only scrape bond yields')
     parser.add_argument('--commod-only', action='store_true',
